@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -228,6 +228,101 @@ function computeFinancials(p: RawProperty): Property {
 const PROPERTIES: Property[] = RAW.map(computeFinancials);
 const MARKETS = ["All", ...Array.from(new Set(RAW.map((p) => p.market)))];
 
+// ─── Expense Overrides (editable per-property) ────────────────────────────────
+
+type ExpenseOverrides = {
+  monthlyRent: number;
+  cleaningPerTurn: number;
+  platformFeeRate: number; // percentage, e.g. 3 = 3%
+  utilities: number;
+  wifi: number;
+  insurance: number;
+  supplies: number;
+  furnishingAmortization: number;
+  maintenanceReserve: number;
+};
+
+function getDefaultOverrides(p: RawProperty): ExpenseOverrides {
+  return {
+    monthlyRent: p.monthlyRent,
+    cleaningPerTurn: p.cleaningPerTurn,
+    platformFeeRate: 3,
+    utilities: p.utilities,
+    wifi: 50,
+    insurance: Math.round(p.monthlyRent * 0.025),
+    supplies: p.supplies,
+    furnishingAmortization: Math.round(p.startupCost / 24),
+    maintenanceReserve: 75,
+  };
+}
+
+type ComputedFinancials = {
+  revenue: number;
+  turnovers: number;
+  cleaningCost: number;
+  platformFee: number;
+  totalExpenses: number;
+  netProfit: number;
+  profitMargin: number;
+  revenueExpenseRatio: number;
+  breakEvenAdr: number;
+  paybackMonths: number;
+};
+
+function computeWithOverrides(p: RawProperty, ov: ExpenseOverrides): ComputedFinancials {
+  const revenue = Math.round(p.adr * 30 * p.occupancy);
+  const turnovers = Math.round((p.occupancy * 30) / 3);
+  const cleaningCost = turnovers * ov.cleaningPerTurn;
+  const platformFee = Math.round(revenue * (ov.platformFeeRate / 100));
+  const totalExpenses =
+    ov.monthlyRent + cleaningCost + platformFee +
+    ov.utilities + ov.wifi + ov.insurance +
+    ov.supplies + ov.furnishingAmortization + ov.maintenanceReserve;
+  const netProfit = revenue - totalExpenses;
+  const profitMargin = revenue > 0 ? netProfit / revenue : 0;
+  const revenueExpenseRatio = totalExpenses > 0 ? revenue / totalExpenses : 0;
+  const fixedMonthly =
+    ov.monthlyRent + cleaningCost +
+    ov.utilities + ov.wifi + ov.insurance +
+    ov.supplies + ov.furnishingAmortization + ov.maintenanceReserve;
+  const platformFactor = 1 - ov.platformFeeRate / 100;
+  const breakEvenAdr =
+    platformFactor > 0
+      ? Math.round(fixedMonthly / (30 * p.occupancy * platformFactor))
+      : 0;
+  const paybackMonths = netProfit > 0 ? p.startupCost / netProfit : Infinity;
+  return {
+    revenue, turnovers, cleaningCost, platformFee, totalExpenses,
+    netProfit, profitMargin, revenueExpenseRatio, breakEvenAdr, paybackMonths,
+  };
+}
+
+function useExpenseOverrides(propertyId: number, defaults: ExpenseOverrides) {
+  const key = `nestly_expenses_v1_${propertyId}`;
+  const [overrides, setOverrides] = useState<ExpenseOverrides>(() => {
+    if (typeof window === "undefined") return defaults;
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved) return { ...defaults, ...JSON.parse(saved) };
+    } catch { /* ignore */ }
+    return defaults;
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem(key, JSON.stringify(overrides)); } catch { /* ignore */ }
+  }, [key, overrides]);
+
+  const set = useCallback(
+    <K extends keyof ExpenseOverrides>(field: K, val: ExpenseOverrides[K]) =>
+      setOverrides((prev) => ({ ...prev, [field]: val })),
+    []
+  );
+
+  const reset = useCallback(() => setOverrides(defaults), [defaults]);
+
+  return { overrides, set, reset };
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const fmt = (n: number) =>
@@ -262,20 +357,24 @@ function getSeasonalProfile(market: string): number[] {
 
 type MonthData = { month: string; revenue: number; expenses: number; net: number };
 
-function computeMonthlyForecast(property: Property): MonthData[] {
+function computeMonthlyForecast(property: RawProperty, ov: ExpenseOverrides): MonthData[] {
   const profile = getSeasonalProfile(property.market);
-  const fixed = property.monthlyRent + property.utilities + property.supplies;
+  const baseRevenue = Math.round(property.adr * 30 * property.occupancy);
+  const baseTurnovers = Math.round((property.occupancy * 30) / 3);
+  const fixed =
+    ov.monthlyRent + ov.utilities + ov.wifi + ov.insurance +
+    ov.supplies + ov.furnishingAmortization + ov.maintenanceReserve;
   return profile.map((mult, i) => {
-    const revenue = Math.round(property.revenue * mult);
-    const cleaning = Math.round(property.turnovers * mult) * property.cleaningPerTurn;
-    const platform = Math.round(revenue * 0.03);
+    const revenue = Math.round(baseRevenue * mult);
+    const cleaning = Math.round(baseTurnovers * mult) * ov.cleaningPerTurn;
+    const platform = Math.round(revenue * (ov.platformFeeRate / 100));
     const expenses = fixed + cleaning + platform;
     return { month: MONTH_NAMES[i], revenue, expenses, net: revenue - expenses };
   });
 }
 
-function ForecastChart({ property }: { property: Property }) {
-  const months = computeMonthlyForecast(property);
+function ForecastChart({ property, overrides }: { property: RawProperty; overrides: ExpenseOverrides }) {
+  const months = computeMonthlyForecast(property, overrides);
   const profits = months.map((m) => m.net);
   const annualNet = profits.reduce((s, v) => s + v, 0);
   const annualRevenue = months.reduce((s, m) => s + m.revenue, 0);
@@ -572,12 +671,19 @@ function DetailPanel({
   property: Property;
   onClose: () => void;
 }) {
+  // ── Expense overrides (editable, localStorage-persisted) ──────────────────
+  const defaults = useMemo(() => getDefaultOverrides(property), [property]);
+  const { overrides, set, reset } = useExpenseOverrides(property.id, defaults);
+  const computed = useMemo(() => computeWithOverrides(property, overrides), [property, overrides]);
+
+  const hasCustom = useMemo(
+    () => (Object.keys(defaults) as (keyof ExpenseOverrides)[]).some((k) => overrides[k] !== defaults[k]),
+    [defaults, overrides]
+  );
+
   const profitColor =
-    property.netProfit >= 2000
-      ? "#34d399"
-      : property.netProfit >= 1000
-      ? "#10b981"
-      : "#f59e0b";
+    computed.netProfit >= 2000 ? "#34d399" :
+    computed.netProfit >= 1000 ? "#10b981" : "#f59e0b";
 
   const [activeTone, setActiveTone] = useState<Tone | null>(null);
   const [pitch, setPitch] = useState("");
@@ -601,14 +707,14 @@ function DetailPanel({
           market: property.market,
           beds: property.beds,
           baths: property.baths,
-          monthlyRent: property.monthlyRent,
-          revenue: property.revenue,
-          netProfit: property.netProfit,
+          monthlyRent: overrides.monthlyRent,
+          revenue: computed.revenue,
+          netProfit: computed.netProfit,
           adr: property.adr,
           occupancy: property.occupancy,
-          profitMargin: property.profitMargin,
-          breakEvenAdr: property.breakEvenAdr,
-          paybackMonths: property.paybackMonths,
+          profitMargin: computed.profitMargin,
+          breakEvenAdr: computed.breakEvenAdr,
+          paybackMonths: computed.paybackMonths,
         }),
       });
 
@@ -718,63 +824,136 @@ function DetailPanel({
             ))}
           </div>
 
-          {/* P&L Breakdown */}
+          {/* P&L Breakdown — editable */}
           <div>
-            <h3
-              className="font-heading text-xs font-semibold uppercase tracking-widest mb-3"
-              style={{ color: "#555" }}
-            >
-              Monthly P&L
-            </h3>
+            {/* Section header */}
+            <div className="flex items-center justify-between mb-3">
+              <h3
+                className="font-heading text-xs font-semibold uppercase tracking-widest"
+                style={{ color: "#555" }}
+              >
+                Monthly P&L
+              </h3>
+              <div className="flex items-center gap-2">
+                {hasCustom && (
+                  <span
+                    className="text-xs px-2 py-0.5 rounded-full font-mono"
+                    style={{ background: "#0d1a14", color: "#10b981", border: "1px solid #1a3a28" }}
+                  >
+                    customized
+                  </span>
+                )}
+                <button
+                  onClick={reset}
+                  className="text-xs px-2.5 py-1 rounded-lg transition-colors"
+                  style={{
+                    background: "transparent",
+                    color: hasCustom ? "#10b981" : "#333",
+                    border: `1px solid ${hasCustom ? "#1a3a28" : "#222"}`,
+                    cursor: hasCustom ? "pointer" : "default",
+                  }}
+                >
+                  Reset to defaults
+                </button>
+              </div>
+            </div>
 
-            <div
-              className="rounded-xl overflow-hidden"
-              style={{ border: "1px solid #1e1e1e" }}
-            >
-              {/* Revenue */}
+            <div className="rounded-xl overflow-hidden" style={{ border: "1px solid #1e1e1e" }}>
+              {/* Revenue (read-only) */}
               <PLRow
                 label="Gross Revenue"
-                value={fmt(property.revenue)}
+                value={fmt(computed.revenue)}
                 valueColor="#f0f0f0"
-                sublabel={`${property.adr} ADR × 30 × ${pct(property.occupancy)} occ`}
+                sublabel={`$${property.adr} ADR × 30 days × ${pct(property.occupancy)} occ`}
                 topBorder={false}
               />
 
-              {/* Expenses */}
-              <div style={{ background: "#0f0f0f" }}>
-                <p
-                  className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-widest"
-                  style={{ color: "#444" }}
+              {/* Editable expenses */}
+              <div style={{ background: "#0d0d0d" }}>
+                <div
+                  className="flex items-center justify-between px-4 pt-3 pb-1.5"
                 >
-                  Expenses
-                </p>
-                <PLRow label="Monthly Rent" value={`− ${fmt(property.monthlyRent)}`} valueColor="#e55" topBorder={false} indent />
-                <PLRow label="Platform Fees (3%)" value={`− ${fmt(property.platformFee)}`} valueColor="#e55" indent />
-                <PLRow
-                  label={`Cleaning (${property.turnovers} turns × $${property.cleaningPerTurn})`}
-                  value={`− ${fmt(property.cleaningCost)}`}
-                  valueColor="#e55"
-                  indent
+                  <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: "#444" }}>
+                    Expenses — edit to match your deal
+                  </p>
+                  <p className="text-xs font-mono" style={{ color: "#e55" }}>
+                    − {fmt(computed.totalExpenses)}
+                  </p>
+                </div>
+
+                <EditableExpenseRow
+                  label="Monthly Rent"
+                  value={overrides.monthlyRent}
+                  recommended={defaults.monthlyRent}
+                  onChange={(v) => set("monthlyRent", v)}
                 />
-                <PLRow label="Utilities" value={`− ${fmt(property.utilities)}`} valueColor="#e55" indent />
-                <PLRow label="Supplies & Toiletries" value={`− ${fmt(property.supplies)}`} valueColor="#e55" indent />
-                <PLRow label="Total Expenses" value={`− ${fmt(property.totalExpenses)}`} valueColor="#f87171" />
+                <EditableExpenseRow
+                  label="Platform Fee"
+                  sublabel={`${fmt(computed.platformFee)}/mo at current rate`}
+                  value={overrides.platformFeeRate}
+                  recommended={defaults.platformFeeRate}
+                  isPercent
+                  onChange={(v) => set("platformFeeRate", v)}
+                />
+                <EditableExpenseRow
+                  label="Cleaning Cost per Turnover"
+                  sublabel={`${computed.turnovers} turns/mo → ${fmt(computed.cleaningCost)}`}
+                  value={overrides.cleaningPerTurn}
+                  recommended={defaults.cleaningPerTurn}
+                  onChange={(v) => set("cleaningPerTurn", v)}
+                />
+                <EditableExpenseRow
+                  label="Utilities"
+                  value={overrides.utilities}
+                  recommended={defaults.utilities}
+                  onChange={(v) => set("utilities", v)}
+                />
+                <EditableExpenseRow
+                  label="WiFi"
+                  value={overrides.wifi}
+                  recommended={defaults.wifi}
+                  onChange={(v) => set("wifi", v)}
+                />
+                <EditableExpenseRow
+                  label="Insurance"
+                  value={overrides.insurance}
+                  recommended={defaults.insurance}
+                  onChange={(v) => set("insurance", v)}
+                />
+                <EditableExpenseRow
+                  label="Supplies & Toiletries"
+                  value={overrides.supplies}
+                  recommended={defaults.supplies}
+                  onChange={(v) => set("supplies", v)}
+                />
+                <EditableExpenseRow
+                  label="Furnishing Amortization"
+                  sublabel={`${fmt(property.startupCost)} startup ÷ 24 mo`}
+                  value={overrides.furnishingAmortization}
+                  recommended={defaults.furnishingAmortization}
+                  onChange={(v) => set("furnishingAmortization", v)}
+                />
+                <EditableExpenseRow
+                  label="Maintenance Reserve"
+                  value={overrides.maintenanceReserve}
+                  recommended={defaults.maintenanceReserve}
+                  onChange={(v) => set("maintenanceReserve", v)}
+                />
               </div>
 
               {/* Net Profit */}
-              <div className="px-4 py-4" style={{ background: "#0d1a14" }}>
+              <div className="px-4 py-4" style={{ background: "#0d1a14", borderTop: "1px solid #1e1e1e" }}>
                 <div className="flex items-center justify-between">
-                  <span
-                    className="font-heading font-bold text-sm"
-                    style={{ color: "#10b981" }}
-                  >
-                    Net Profit
-                  </span>
-                  <span
-                    className="font-mono-nums text-2xl font-bold"
-                    style={{ color: profitColor }}
-                  >
-                    {fmt(property.netProfit)}
+                  <div>
+                    <span className="font-heading font-bold text-sm" style={{ color: "#10b981" }}>
+                      Net Profit
+                    </span>
+                    <p className="text-xs mt-0.5" style={{ color: "#2d6b4a" }}>
+                      {pct(computed.profitMargin)} margin · {computed.revenueExpenseRatio.toFixed(2)}× ratio
+                    </p>
+                  </div>
+                  <span className="font-mono-nums text-2xl font-bold" style={{ color: profitColor }}>
+                    {fmt(computed.netProfit)}
                   </span>
                 </div>
               </div>
@@ -792,27 +971,27 @@ function DetailPanel({
             <div className="grid grid-cols-2 gap-3">
               <MetricCard
                 label="Profit Margin"
-                value={pct(property.profitMargin)}
+                value={pct(computed.profitMargin)}
                 sub="of gross revenue"
-                highlight={property.profitMargin >= 0.25}
+                highlight={computed.profitMargin >= 0.25}
               />
               <MetricCard
                 label="Rev / Expense Ratio"
-                value={property.revenueExpenseRatio.toFixed(2)}
+                value={computed.revenueExpenseRatio.toFixed(2)}
                 sub="revenue per $1 spent"
-                highlight={property.revenueExpenseRatio >= 1.3}
+                highlight={computed.revenueExpenseRatio >= 1.3}
               />
               <MetricCard
                 label="Break-even ADR"
-                value={`$${property.breakEvenAdr}`}
+                value={`$${computed.breakEvenAdr}`}
                 sub={`vs $${property.adr} current`}
-                highlight={property.breakEvenAdr < property.adr * 0.75}
+                highlight={computed.breakEvenAdr < property.adr * 0.75}
               />
               <MetricCard
                 label="ADR Cushion"
-                value={pct((property.adr - property.breakEvenAdr) / property.adr)}
+                value={pct((property.adr - computed.breakEvenAdr) / property.adr)}
                 sub="before losing money"
-                highlight={(property.adr - property.breakEvenAdr) / property.adr >= 0.25}
+                highlight={(property.adr - computed.breakEvenAdr) / property.adr >= 0.25}
               />
             </div>
           </div>
@@ -833,15 +1012,23 @@ function DetailPanel({
               />
               <MetricCard
                 label="Payback Period"
-                value={`${property.paybackMonths.toFixed(1)} mo`}
-                sub={`≈ ${(property.paybackMonths / 12).toFixed(1)} years`}
-                highlight={property.paybackMonths <= 18}
+                value={
+                  computed.paybackMonths === Infinity
+                    ? "∞"
+                    : `${computed.paybackMonths.toFixed(1)} mo`
+                }
+                sub={
+                  computed.paybackMonths === Infinity
+                    ? "not profitable yet"
+                    : `≈ ${(computed.paybackMonths / 12).toFixed(1)} years`
+                }
+                highlight={computed.paybackMonths > 0 && computed.paybackMonths <= 18}
               />
             </div>
           </div>
 
           {/* 12-Month Forecast */}
-          <ForecastChart property={property} />
+          <ForecastChart property={property} overrides={overrides} />
 
           {/* Landlord Pitch Generator */}
           <div>
@@ -991,6 +1178,84 @@ function PLRow({
       >
         {value}
       </p>
+    </div>
+  );
+}
+
+function EditableExpenseRow({
+  label,
+  sublabel,
+  value,
+  recommended,
+  isPercent = false,
+  onChange,
+}: {
+  label: string;
+  sublabel?: string;
+  value: number;
+  recommended: number;
+  isPercent?: boolean;
+  onChange: (v: number) => void;
+}) {
+  const changed = value !== recommended;
+  const recLabel = isPercent ? `${recommended}%` : `$${recommended.toLocaleString()}`;
+
+  return (
+    <div
+      className="flex items-center justify-between px-4 py-2.5 pl-5"
+      style={{ borderTop: "1px solid #1e1e1e" }}
+    >
+      <div className="flex-1 mr-3 min-w-0">
+        <p className="text-sm" style={{ color: changed ? "#d0d0d0" : "#888" }}>
+          {label}
+          {changed && (
+            <span className="ml-1.5 text-xs font-mono" style={{ color: "#10b981" }}>
+              ✦
+            </span>
+          )}
+        </p>
+        {sublabel && (
+          <p className="text-xs mt-0.5" style={{ color: "#444" }}>
+            {sublabel}
+          </p>
+        )}
+        <p className="text-xs mt-0.5" style={{ color: changed ? "#10b98155" : "#333" }}>
+          Recommended: {recLabel}
+        </p>
+      </div>
+      <div className="flex items-center gap-1 flex-shrink-0">
+        {!isPercent && (
+          <span className="text-xs font-mono" style={{ color: "#444" }}>
+            $
+          </span>
+        )}
+        <input
+          type="number"
+          min={0}
+          step={isPercent ? 0.5 : 1}
+          value={value}
+          onChange={(e) => onChange(Math.max(0, parseFloat(e.target.value) || 0))}
+          className="text-right rounded-lg px-2 py-1.5 text-sm font-mono focus:outline-none transition-all"
+          style={{
+            width: 80,
+            background: "#161616",
+            border: `1px solid ${changed ? "#10b98166" : "#252525"}`,
+            color: changed ? "#f0f0f0" : "#ccc",
+            outline: "none",
+          }}
+          onFocus={(e) =>
+            (e.currentTarget.style.borderColor = "#10b981")
+          }
+          onBlur={(e) =>
+            (e.currentTarget.style.borderColor = changed ? "#10b98166" : "#252525")
+          }
+        />
+        {isPercent && (
+          <span className="text-xs font-mono" style={{ color: "#444" }}>
+            %
+          </span>
+        )}
+      </div>
     </div>
   );
 }
