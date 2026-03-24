@@ -232,6 +232,7 @@ const MARKETS = ["All", ...Array.from(new Set(RAW.map((p) => p.market)))];
 
 type ExpenseOverrides = {
   monthlyRent: number;
+  avgStayNights: number;   // avg stay length → drives turnovers/mo
   cleaningPerTurn: number;
   platformFeeRate: number; // percentage, e.g. 3 = 3%
   utilities: number;
@@ -245,14 +246,15 @@ type ExpenseOverrides = {
 function getDefaultOverrides(p: RawProperty): ExpenseOverrides {
   return {
     monthlyRent: p.monthlyRent,
+    avgStayNights: 3,
     cleaningPerTurn: p.cleaningPerTurn,
     platformFeeRate: 3,
     utilities: p.utilities,
-    wifi: 50,
-    insurance: Math.round(p.monthlyRent * 0.025),
+    wifi: 60,
+    insurance: 100,
     supplies: p.supplies,
-    furnishingAmortization: Math.round(p.startupCost / 24),
-    maintenanceReserve: 75,
+    furnishingAmortization: 200,
+    maintenanceReserve: 100,
   };
 }
 
@@ -271,7 +273,8 @@ type ComputedFinancials = {
 
 function computeWithOverrides(p: RawProperty, ov: ExpenseOverrides): ComputedFinancials {
   const revenue = Math.round(p.adr * 30 * p.occupancy);
-  const turnovers = Math.round((p.occupancy * 30) / 3);
+  const stayLen = Math.max(1, ov.avgStayNights);
+  const turnovers = Math.round((p.occupancy * 30) / stayLen);
   const cleaningCost = turnovers * ov.cleaningPerTurn;
   const platformFee = Math.round(revenue * (ov.platformFeeRate / 100));
   const totalExpenses =
@@ -360,7 +363,8 @@ type MonthData = { month: string; revenue: number; expenses: number; net: number
 function computeMonthlyForecast(property: RawProperty, ov: ExpenseOverrides): MonthData[] {
   const profile = getSeasonalProfile(property.market);
   const baseRevenue = Math.round(property.adr * 30 * property.occupancy);
-  const baseTurnovers = Math.round((property.occupancy * 30) / 3);
+  const stayLen = Math.max(1, ov.avgStayNights);
+  const baseTurnovers = Math.round((property.occupancy * 30) / stayLen);
   const fixed =
     ov.monthlyRent + ov.utilities + ov.wifi + ov.insurance +
     ov.supplies + ov.furnishingAmortization + ov.maintenanceReserve;
@@ -675,6 +679,8 @@ function DetailPanel({
   const defaults = useMemo(() => getDefaultOverrides(property), [property]);
   const { overrides, set, reset } = useExpenseOverrides(property.id, defaults);
   const computed = useMemo(() => computeWithOverrides(property, overrides), [property, overrides]);
+  const defaultComputed = useMemo(() => computeWithOverrides(property, defaults), [property, defaults]);
+  const delta = computed.netProfit - defaultComputed.netProfit;
 
   const hasCustom = useMemo(
     () => (Object.keys(defaults) as (keyof ExpenseOverrides)[]).some((k) => overrides[k] !== defaults[k]),
@@ -896,8 +902,17 @@ function DetailPanel({
                   onChange={(v) => set("platformFeeRate", v)}
                 />
                 <EditableExpenseRow
+                  label="Avg Stay Length"
+                  sublabel={`→ ${computed.turnovers} turnovers/mo at ${pct(property.occupancy)} occ`}
+                  value={overrides.avgStayNights}
+                  recommended={defaults.avgStayNights}
+                  suffix="nights"
+                  step={0.5}
+                  onChange={(v) => set("avgStayNights", Math.max(1, v))}
+                />
+                <EditableExpenseRow
                   label="Cleaning Cost per Turnover"
-                  sublabel={`${computed.turnovers} turns/mo → ${fmt(computed.cleaningCost)}`}
+                  sublabel={`${computed.turnovers} turns × $${overrides.cleaningPerTurn} → ${fmt(computed.cleaningCost)}/mo`}
                   value={overrides.cleaningPerTurn}
                   recommended={defaults.cleaningPerTurn}
                   onChange={(v) => set("cleaningPerTurn", v)}
@@ -943,18 +958,39 @@ function DetailPanel({
 
               {/* Net Profit */}
               <div className="px-4 py-4" style={{ background: "#0d1a14", borderTop: "1px solid #1e1e1e" }}>
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
                     <span className="font-heading font-bold text-sm" style={{ color: "#10b981" }}>
                       Net Profit
                     </span>
                     <p className="text-xs mt-0.5" style={{ color: "#2d6b4a" }}>
                       {pct(computed.profitMargin)} margin · {computed.revenueExpenseRatio.toFixed(2)}× ratio
                     </p>
+                    {/* Comparison vs recommended */}
+                    {hasCustom && (
+                      <p
+                        className="text-xs mt-1.5 font-mono"
+                        style={{
+                          color: delta > 0 ? "#34d399" : delta < 0 ? "#f87171" : "#555",
+                        }}
+                      >
+                        Your numbers vs recommended:{" "}
+                        <span className="font-semibold">
+                          {delta > 0 ? "+" : ""}
+                          {fmt(delta)}/mo
+                        </span>
+                        {" "}({delta > 0 ? "+" : ""}{fmt(delta * 12)}/yr)
+                      </p>
+                    )}
                   </div>
-                  <span className="font-mono-nums text-2xl font-bold" style={{ color: profitColor }}>
-                    {fmt(computed.netProfit)}
-                  </span>
+                  <div className="text-right flex-shrink-0">
+                    <span className="font-mono-nums text-2xl font-bold" style={{ color: profitColor }}>
+                      {fmt(computed.netProfit)}
+                    </span>
+                    <p className="text-xs mt-0.5 font-mono" style={{ color: "#2d6b4a" }}>
+                      {fmt(computed.netProfit * 12)}/yr
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1188,6 +1224,9 @@ function EditableExpenseRow({
   value,
   recommended,
   isPercent = false,
+  prefix = "$",
+  suffix,
+  step = 1,
   onChange,
 }: {
   label: string;
@@ -1195,10 +1234,17 @@ function EditableExpenseRow({
   value: number;
   recommended: number;
   isPercent?: boolean;
+  prefix?: string;
+  suffix?: string;
+  step?: number;
   onChange: (v: number) => void;
 }) {
   const changed = value !== recommended;
-  const recLabel = isPercent ? `${recommended}%` : `$${recommended.toLocaleString()}`;
+  const recLabel = isPercent
+    ? `${recommended}%`
+    : suffix
+    ? `${recommended} ${suffix}`
+    : `$${recommended.toLocaleString()}`;
 
   return (
     <div
@@ -1224,15 +1270,15 @@ function EditableExpenseRow({
         </p>
       </div>
       <div className="flex items-center gap-1 flex-shrink-0">
-        {!isPercent && (
+        {!isPercent && !suffix && (
           <span className="text-xs font-mono" style={{ color: "#444" }}>
-            $
+            {prefix}
           </span>
         )}
         <input
           type="number"
           min={0}
-          step={isPercent ? 0.5 : 1}
+          step={isPercent ? 0.5 : step}
           value={value}
           onChange={(e) => onChange(Math.max(0, parseFloat(e.target.value) || 0))}
           className="text-right rounded-lg px-2 py-1.5 text-sm font-mono focus:outline-none transition-all"
@@ -1243,16 +1289,14 @@ function EditableExpenseRow({
             color: changed ? "#f0f0f0" : "#ccc",
             outline: "none",
           }}
-          onFocus={(e) =>
-            (e.currentTarget.style.borderColor = "#10b981")
-          }
+          onFocus={(e) => (e.currentTarget.style.borderColor = "#10b981")}
           onBlur={(e) =>
             (e.currentTarget.style.borderColor = changed ? "#10b98166" : "#252525")
           }
         />
-        {isPercent && (
+        {(isPercent || suffix) && (
           <span className="text-xs font-mono" style={{ color: "#444" }}>
-            %
+            {isPercent ? "%" : suffix}
           </span>
         )}
       </div>
