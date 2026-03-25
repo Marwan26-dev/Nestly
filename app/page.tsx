@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +37,7 @@ type Property = RawProperty & {
   revenueExpenseRatio: number;
   breakEvenAdr: number;
   paybackMonths: number;
+  score: number;
 };
 
 // ─── Raw Data ─────────────────────────────────────────────────────────────────
@@ -369,6 +370,15 @@ function computeFinancials(p: RawProperty): Property {
   const breakEvenAdr = Math.round(fixedMonthly / (30 * p.occupancy * 0.97));
   const paybackMonths = p.startupCost / netProfit;
 
+  // Score 0–100: profit(40) + margin(20) + occupancy(20) + ADR cushion(20)
+  const cushionRatio = p.adr > 0 ? (p.adr - breakEvenAdr) / p.adr : 0;
+  const score = Math.min(100, Math.round(
+    Math.min(40, Math.max(0, (netProfit / 2500) * 40)) +
+    Math.min(20, Math.max(0, (profitMargin / 0.35) * 20)) +
+    Math.min(20, Math.max(0, ((p.occupancy - 0.5) / 0.3) * 20)) +
+    Math.min(20, Math.max(0, (cushionRatio / 0.35) * 20))
+  ));
+
   return {
     ...p,
     revenue,
@@ -381,6 +391,7 @@ function computeFinancials(p: RawProperty): Property {
     revenueExpenseRatio,
     breakEvenAdr,
     paybackMonths,
+    score,
   };
 }
 
@@ -498,6 +509,14 @@ const marketColors: Record<string, string> = {
   Nashville: "#6ee7b7",
   Scottsdale: "#a7f3d0",
   Knoxville: "#059669",
+};
+
+const MARKET_ICONS: Record<string, string> = {
+  Chattanooga: "🏔️",
+  Savannah: "🌿",
+  Nashville: "🎵",
+  Scottsdale: "🌵",
+  Knoxville: "🏈",
 };
 
 // ─── Seasonal Forecast ────────────────────────────────────────────────────────
@@ -713,7 +732,16 @@ function PropertyCard({
   onClick: () => void;
 }) {
   const profitColor =
-    property.netProfit >= 2000 ? "#34d399" : property.netProfit >= 1000 ? "#10b981" : "#f59e0b";
+    property.netProfit >= 2000 ? "#34d399" :
+    property.netProfit >= 800  ? "#10b981" :
+    property.netProfit >= 0    ? "#f59e0b" : "#f87171";
+
+  const scoreColor =
+    property.score >= 75 ? "#10b981" :
+    property.score >= 60 ? "#f59e0b" : "#f87171";
+  const scoreBg =
+    property.score >= 75 ? "#0d1a14" :
+    property.score >= 60 ? "#1a1400" : "#1a0a0a";
 
   return (
     <button
@@ -721,115 +749,101 @@ function PropertyCard({
       className="group text-left w-full rounded-xl overflow-hidden border transition-all duration-200"
       style={{
         background: selected ? "#111d16" : "#111111",
-        borderColor: selected ? "#10b981" : "#222222",
+        borderColor: selected ? "#10b981" : "#1e1e1e",
         boxShadow: selected ? "0 0 0 1px #10b981" : "none",
       }}
     >
       {/* Image */}
-      <div className="relative overflow-hidden" style={{ height: 200 }}>
+      <div className="relative overflow-hidden" style={{ height: 162 }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={property.imageUrl}
           alt={property.name}
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
         />
-        {/* Gradient scrim */}
         <div
           className="absolute inset-0"
-          style={{
-            background: "linear-gradient(to top, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.1) 55%, transparent 100%)",
-          }}
+          style={{ background: "linear-gradient(to top, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.08) 52%, transparent 100%)" }}
         />
         {/* Market badge — top left */}
         <span
-          className="absolute top-3 left-3 text-xs font-semibold px-2.5 py-1 rounded-full"
+          className="absolute top-2.5 left-2.5 text-xs font-semibold px-2 py-0.5 rounded-full"
           style={{
-            background: `${marketColors[property.market]}22`,
+            background: `${marketColors[property.market]}1e`,
             color: marketColors[property.market],
             backdropFilter: "blur(6px)",
-            border: `1px solid ${marketColors[property.market]}44`,
+            border: `1px solid ${marketColors[property.market]}40`,
           }}
         >
           {property.market}
         </span>
-        {/* Profit badge — bottom left, overlaid on image */}
-        <div className="absolute bottom-3 left-3">
+        {/* Score badge — top right */}
+        <div
+          className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
+          style={{
+            background: scoreBg,
+            color: scoreColor,
+            border: `1.5px solid ${scoreColor}66`,
+            backdropFilter: "blur(6px)",
+          }}
+        >
+          {property.score}
+        </div>
+        {/* Profit — bottom left */}
+        <div className="absolute bottom-2.5 left-2.5">
           <div
-            className="rounded-lg px-3 py-1.5 flex items-baseline gap-1"
-            style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(8px)" }}
+            className="rounded-lg px-2.5 py-1 flex items-baseline gap-1"
+            style={{ background: "rgba(0,0,0,0.80)", backdropFilter: "blur(8px)" }}
           >
-            <span
-              className="font-mono-nums text-2xl font-bold tracking-tight"
-              style={{ color: profitColor }}
-            >
+            <span className="font-mono-nums text-lg font-bold tracking-tight" style={{ color: profitColor }}>
               {fmt(property.netProfit)}
             </span>
-            <span className="text-xs" style={{ color: "#888" }}>
-              /mo net
-            </span>
+            <span className="text-xs" style={{ color: "#666" }}>/mo</span>
           </div>
         </div>
-        {/* Beds/baths/sqft — bottom right */}
+        {/* Beds/baths — bottom right */}
         <span
-          className="absolute bottom-3 right-3 text-xs px-2 py-1 rounded"
-          style={{ background: "rgba(0,0,0,0.65)", color: "#bbb", backdropFilter: "blur(6px)" }}
+          className="absolute bottom-2.5 right-2.5 text-xs px-2 py-0.5 rounded"
+          style={{ background: "rgba(0,0,0,0.68)", color: "#aaa", backdropFilter: "blur(6px)" }}
         >
-          {property.beds}bd · {property.baths}ba · {property.sqft.toLocaleString()} sqft
+          {property.beds}bd · {property.baths}ba
         </span>
       </div>
 
       {/* Card body */}
-      <div className="p-4">
-        {/* Property name */}
-        <h3
-          className="font-heading text-base font-semibold leading-snug mb-1"
-          style={{ color: "#f0f0f0" }}
-        >
+      <div className="px-3.5 pt-3 pb-3.5">
+        <h3 className="font-heading text-sm font-semibold leading-snug mb-0.5" style={{ color: "#f0f0f0" }}>
           {property.name}
         </h3>
-
-        {/* Address */}
-        <p className="text-xs mb-2.5" style={{ color: "#555" }}>
+        <p className="text-xs mb-3 truncate" style={{ color: "#505050" }}>
           {property.address}
         </p>
 
-        {/* Description */}
-        <p
-          className="text-sm leading-relaxed mb-3"
-          style={{
-            color: "#888",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
-        >
-          {property.description}
-        </p>
-
-        {/* Key stats row */}
-        <div
-          className="grid grid-cols-3 gap-2 pt-3"
-          style={{ borderTop: "1px solid #1e1e1e" }}
-        >
-          <Stat label="ADR" value={`$${property.adr}`} />
-          <Stat label="Occupancy" value={pct(property.occupancy)} />
-          <Stat label="Rent" value={fmt(property.monthlyRent)} />
+        {/* Stats row */}
+        <div className="grid grid-cols-3 gap-1 pt-2.5" style={{ borderTop: "1px solid #1c1c1c" }}>
+          <CompactStat label="ADR" value={`$${property.adr}`} />
+          <CompactStat label="Occ" value={`${(property.occupancy * 100).toFixed(0)}%`} />
+          <CompactStat label="Rent" value={`$${(property.monthlyRent / 1000).toFixed(1)}k`} />
         </div>
       </div>
     </button>
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function CompactStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="text-center">
+      <p className="font-mono-nums text-xs font-semibold" style={{ color: "#c0c0c0" }}>{value}</p>
+      <p style={{ fontSize: 10, color: "#444", marginTop: 1 }}>{label}</p>
+    </div>
+  );
+}
+
+function StatPill({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <div>
-      <p className="text-xs mb-0.5" style={{ color: "#555" }}>
-        {label}
-      </p>
-      <p className="font-mono-nums text-sm font-medium" style={{ color: "#ccc" }}>
-        {value}
-      </p>
+      <p style={{ fontSize: 10, color: "#444" }}>{label}</p>
+      <p className="font-mono-nums text-sm font-semibold" style={{ color: color ?? "#888" }}>{value}</p>
     </div>
   );
 }
@@ -1560,173 +1574,60 @@ function MetricCard({
   );
 }
 
-// ─── FilterBar ────────────────────────────────────────────────────────────────
-
-function FilterBar({
-  filters,
-  onChange,
-  totalShown,
-  totalCount,
-}: {
-  filters: Filters;
-  onChange: (f: Filters) => void;
-  totalShown: number;
-  totalCount: number;
-}) {
-  const set = <K extends keyof Filters>(key: K, value: Filters[K]) =>
-    onChange({ ...filters, [key]: value });
-
-  const selectCls =
-    "bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-[#ccc] focus:outline-none focus:border-[#10b981] transition-colors appearance-none cursor-pointer hover:border-[#333]";
-
-  return (
-    <div
-      className="sticky top-0 z-30 px-6 py-4"
-      style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}
-    >
-      <div className="max-w-7xl mx-auto flex flex-wrap items-center gap-3">
-        {/* Market */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs" style={{ color: "#555" }}>
-            Market
-          </label>
-          <select
-            value={filters.market}
-            onChange={(e) => set("market", e.target.value)}
-            className={selectCls}
-            style={{ minWidth: 140 }}
-          >
-            {MARKETS.map((m) => (
-              <option key={m} value={m}>
-                {m === "All" ? "All Markets" : m}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Min Profit */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs" style={{ color: "#555" }}>
-            Min Profit
-          </label>
-          <select
-            value={filters.minProfit}
-            onChange={(e) => set("minProfit", Number(e.target.value))}
-            className={selectCls}
-          >
-            <option value={0}>Any profit</option>
-            <option value={500}>$500+</option>
-            <option value={1000}>$1,000+</option>
-            <option value={1500}>$1,500+</option>
-            <option value={2000}>$2,000+</option>
-            <option value={2500}>$2,500+</option>
-          </select>
-        </div>
-
-        {/* Max Rent */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs" style={{ color: "#555" }}>
-            Max Rent
-          </label>
-          <select
-            value={filters.maxRent}
-            onChange={(e) => set("maxRent", Number(e.target.value))}
-            className={selectCls}
-          >
-            <option value={999999}>Any rent</option>
-            <option value={1500}>≤ $1,500</option>
-            <option value={2000}>≤ $2,000</option>
-            <option value={2500}>≤ $2,500</option>
-            <option value={3000}>≤ $3,000</option>
-            <option value={4000}>≤ $4,000</option>
-          </select>
-        </div>
-
-        {/* Beds */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs" style={{ color: "#555" }}>
-            Beds
-          </label>
-          <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid #2a2a2a" }}>
-            {[0, 1, 2, 3].map((b) => (
-              <button
-                key={b}
-                onClick={() => set("beds", b)}
-                className="px-3 py-2 text-sm transition-colors"
-                style={{
-                  background: filters.beds === b ? "#10b981" : "#1a1a1a",
-                  color: filters.beds === b ? "#000" : "#999",
-                  fontWeight: filters.beds === b ? 600 : 400,
-                  borderLeft: b > 0 ? "1px solid #2a2a2a" : undefined,
-                }}
-              >
-                {b === 0 ? "All" : b === 3 ? "3+" : b}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Sort */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs" style={{ color: "#555" }}>
-            Sort By
-          </label>
-          <select
-            value={filters.sortBy}
-            onChange={(e) => set("sortBy", e.target.value)}
-            className={selectCls}
-          >
-            <option value="profit-desc">Profit: High → Low</option>
-            <option value="profit-asc">Profit: Low → High</option>
-            <option value="rent-asc">Rent: Low → High</option>
-            <option value="rent-desc">Rent: High → Low</option>
-            <option value="occupancy-desc">Occupancy: High → Low</option>
-            <option value="payback-asc">Payback: Fastest first</option>
-          </select>
-        </div>
-
-        {/* Results count + reset */}
-        <div className="ml-auto flex items-end gap-3 pb-0.5">
-          <span className="text-sm" style={{ color: "#555" }}>
-            <span style={{ color: "#888" }}>{totalShown}</span> of {totalCount} properties
-          </span>
-          {(filters.market !== "All" ||
-            filters.minProfit !== 0 ||
-            filters.maxRent !== 999999 ||
-            filters.beds !== 0 ||
-            filters.sortBy !== "profit-desc") && (
-            <button
-              onClick={() => onChange(DEFAULT_FILTERS)}
-              className="text-xs px-2.5 py-1.5 rounded-lg transition-colors hover:bg-[#1a1a1a]"
-              style={{ color: "#10b981", border: "1px solid #1a3a28" }}
-            >
-              Reset filters
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Home() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    function handle(e: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, []);
+
+  // Autocomplete suggestions
+  const suggestions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (q.length < 2) return [] as { label: string; type: "market" | "property" | "address" }[];
+    const results: { label: string; type: "market" | "property" | "address" }[] = [];
+    MARKETS.filter(m => m !== "All" && m.toLowerCase().includes(q))
+      .forEach(m => results.push({ label: m, type: "market" }));
+    PROPERTIES.filter(p => p.name.toLowerCase().includes(q))
+      .slice(0, 3).forEach(p => results.push({ label: p.name, type: "property" }));
+    PROPERTIES.filter(p => p.address.toLowerCase().includes(q))
+      .slice(0, 2).forEach(p => results.push({ label: p.address.split(",")[0].trim(), type: "address" }));
+    return results.slice(0, 6);
+  }, [searchQuery]);
 
   const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return PROPERTIES.filter((p) => {
       if (filters.market !== "All" && p.market !== filters.market) return false;
       if (p.netProfit < filters.minProfit) return false;
       if (p.monthlyRent > filters.maxRent) return false;
       if (filters.beds === 3 && p.beds < 3) return false;
       if (filters.beds > 0 && filters.beds < 3 && p.beds !== filters.beds) return false;
+      if (q.length >= 2) {
+        if (!p.market.toLowerCase().includes(q) &&
+            !p.address.toLowerCase().includes(q) &&
+            !p.name.toLowerCase().includes(q)) return false;
+      }
       return true;
     }).sort((a, b) => {
       switch (filters.sortBy) {
         case "profit-desc":    return b.netProfit - a.netProfit;
         case "profit-asc":    return a.netProfit - b.netProfit;
+        case "score-desc":    return b.score - a.score;
         case "rent-asc":      return a.monthlyRent - b.monthlyRent;
         case "rent-desc":     return b.monthlyRent - a.monthlyRent;
         case "occupancy-desc": return b.occupancy - a.occupancy;
@@ -1734,139 +1635,277 @@ export default function Home() {
         default:              return b.netProfit - a.netProfit;
       }
     });
-  }, [filters]);
+  }, [filters, searchQuery]);
 
   const selectedProperty = selectedId != null
     ? PROPERTIES.find((p) => p.id === selectedId) ?? null
     : null;
 
-  const totalMonthlyProfit = filtered.reduce((s, p) => s + p.netProfit, 0);
+  const avgProfit = filtered.length > 0
+    ? Math.round(filtered.reduce((s, p) => s + p.netProfit, 0) / filtered.length)
+    : 0;
+  const topProfit = filtered.length > 0 ? Math.max(...filtered.map(p => p.netProfit)) : 0;
+  const investableCount = filtered.filter(p => p.score >= 60).length;
+
+  const isFiltered =
+    filters.market !== "All" || filters.minProfit !== 0 ||
+    filters.maxRent !== 999999 || filters.beds !== 0 ||
+    searchQuery.trim().length >= 2;
+
+  function handleSuggestionClick(label: string, type: string) {
+    if (type === "market") {
+      setFilters(prev => ({ ...prev, market: label }));
+      setSearchQuery("");
+    } else {
+      setSearchQuery(label);
+    }
+    setShowSuggestions(false);
+  }
+
+  const selectCls =
+    "bg-[#161616] border border-[#242424] rounded-lg px-3 py-1.5 text-sm text-[#ccc] focus:outline-none focus:border-[#10b981] transition-colors appearance-none cursor-pointer";
 
   return (
     <div className="min-h-screen" style={{ background: "#0a0a0a" }}>
-      {/* Header */}
-      <header
-        className="px-6 py-5"
-        style={{ borderBottom: "1px solid #1a1a1a" }}
-      >
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold"
-              style={{ background: "#10b981", color: "#000" }}
-            >
-              N
-            </div>
-            <div>
-              <span
-                className="font-heading text-xl font-bold tracking-tight"
-                style={{ color: "#f0f0f0" }}
-              >
-                Nestly
-              </span>
-              <span
-                className="ml-2 text-sm hidden sm:inline"
-                style={{ color: "#555" }}
-              >
-                STR Profit Intelligence
-              </span>
-            </div>
-          </div>
 
-          {/* Portfolio summary */}
-          {filtered.length > 0 && (
-            <div className="hidden md:flex items-center gap-6">
-              <div className="text-right">
-                <p className="text-xs" style={{ color: "#555" }}>
-                  Avg Monthly Profit
-                </p>
-                <p
-                  className="font-mono-nums text-sm font-semibold"
-                  style={{ color: "#10b981" }}
+      {/* ── Sticky top bar ───────────────────────────────────────────────── */}
+      <div className="sticky top-0 z-30" style={{ background: "#0a0a0a" }}>
+
+        {/* Row 1: Logo + Search + Filters toggle */}
+        <div className="px-4 sm:px-6 pt-4 pb-3" style={{ borderBottom: "1px solid #141414" }}>
+          <div className="max-w-5xl mx-auto">
+            {/* Logo row */}
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold flex-shrink-0"
+                  style={{ background: "#10b981", color: "#000" }}
                 >
-                  {fmt(totalMonthlyProfit / filtered.length)}
-                </p>
+                  N
+                </div>
+                <span className="font-heading text-lg font-bold tracking-tight" style={{ color: "#f0f0f0" }}>
+                  Nestly
+                </span>
+                <span className="hidden sm:inline text-xs ml-0.5" style={{ color: "#3a3a3a" }}>
+                  STR Profit Intelligence
+                </span>
               </div>
-              <div className="text-right">
-                <p className="text-xs" style={{ color: "#555" }}>
-                  Top Performer
-                </p>
-                <p
-                  className="font-mono-nums text-sm font-semibold"
-                  style={{ color: "#34d399" }}
-                >
-                  {fmt(filtered[0]?.netProfit ?? 0)}
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-      </header>
-
-      {/* Hero */}
-      <div className="px-6 pt-10 pb-8">
-        <div className="max-w-7xl mx-auto">
-          <h1
-            className="font-heading text-4xl sm:text-5xl font-bold tracking-tight leading-tight mb-3"
-            style={{ color: "#f0f0f0" }}
-          >
-            Find STRs by{" "}
-            <span style={{ color: "#10b981" }}>monthly profit</span>
-            ,<br className="hidden sm:block" /> not just rent.
-          </h1>
-          <p className="text-lg max-w-xl" style={{ color: "#666" }}>
-            Every property analyzed for net profit after rent, cleaning, platform
-            fees, and operating costs. Click any card for a full P&L breakdown.
-          </p>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <FilterBar
-        filters={filters}
-        onChange={setFilters}
-        totalShown={filtered.length}
-        totalCount={PROPERTIES.length}
-      />
-
-      {/* Grid */}
-      <main className="px-6 py-8">
-        <div className="max-w-7xl mx-auto">
-          {filtered.length === 0 ? (
-            <div className="text-center py-24">
-              <p
-                className="font-heading text-2xl font-semibold mb-2"
-                style={{ color: "#333" }}
-              >
-                No properties match
-              </p>
-              <p className="text-sm mb-6" style={{ color: "#555" }}>
-                Try adjusting your filters
-              </p>
               <button
-                onClick={() => setFilters(DEFAULT_FILTERS)}
-                className="text-sm px-4 py-2 rounded-lg transition-colors"
+                onClick={() => setShowFilters(v => !v)}
+                className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all"
                 style={{
-                  background: "#10b981",
-                  color: "#000",
-                  fontWeight: 600,
+                  background: showFilters ? "#0d1a14" : "#161616",
+                  color: showFilters ? "#10b981" : "#777",
+                  border: `1px solid ${showFilters ? "#1a3a28" : "#242424"}`,
                 }}
               >
-                Reset filters
+                <svg width="13" height="11" viewBox="0 0 13 11" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                  <path d="M0 1.5h13M3 5.5h7M5 9.5h3"/>
+                </svg>
+                Filters
+                {(filters.minProfit !== 0 || filters.maxRent !== 999999 || filters.beds !== 0) && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] flex-shrink-0" />
+                )}
+              </button>
+            </div>
+
+            {/* Search bar */}
+            <div className="relative" ref={searchRef}>
+              <svg
+                className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                width="15" height="15" viewBox="0 0 15 15" fill="none"
+                style={{ color: "#404040" }}
+              >
+                <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.4"/>
+                <path d="M9.5 9.5L13 13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+              </svg>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => { setSearchQuery(e.target.value); setShowSuggestions(true); }}
+                onFocus={e => { setShowSuggestions(true); e.currentTarget.style.borderColor = "#10b981"; }}
+                onBlur={e => (e.currentTarget.style.borderColor = "#222")}
+                placeholder="Search any city, neighborhood, or address..."
+                className="w-full pl-10 pr-9 py-2.5 rounded-xl text-sm"
+                style={{
+                  background: "#141414",
+                  border: "1px solid #222",
+                  color: "#f0f0f0",
+                  outline: "none",
+                  transition: "border-color 0.15s",
+                }}
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => { setSearchQuery(""); setShowSuggestions(false); }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full flex items-center justify-center text-xs transition-colors hover:bg-[#2a2a2a]"
+                  style={{ color: "#555" }}
+                >
+                  ✕
+                </button>
+              )}
+
+              {/* Autocomplete dropdown */}
+              {showSuggestions && suggestions.length > 0 && (
+                <div
+                  className="absolute top-full left-0 right-0 mt-1 rounded-xl overflow-hidden z-50"
+                  style={{ background: "#161616", border: "1px solid #252525", boxShadow: "0 12px 40px rgba(0,0,0,0.7)" }}
+                >
+                  {suggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      onMouseDown={() => handleSuggestionClick(s.label, s.type)}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors hover:bg-[#1e1e1e]"
+                      style={{ color: "#c0c0c0", borderTop: i > 0 ? "1px solid #1c1c1c" : "none" }}
+                    >
+                      <span style={{ fontSize: 13 }}>
+                        {s.type === "market" ? "📍" : s.type === "property" ? "🏠" : "📫"}
+                      </span>
+                      <span className="flex-1 truncate">{s.label}</span>
+                      {s.type === "market" && (
+                        <span className="text-xs flex-shrink-0" style={{ color: "#444" }}>Market</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Row 2: Market pills */}
+        <div className="px-4 sm:px-6 py-2" style={{ background: "#080808", borderBottom: "1px solid #141414" }}>
+          <div className="max-w-5xl mx-auto flex items-center gap-1.5 overflow-x-auto">
+            {MARKETS.slice(1).map(market => {
+              const active = filters.market === market;
+              return (
+                <button
+                  key={market}
+                  onClick={() => setFilters(prev => ({ ...prev, market: active ? "All" : market }))}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0"
+                  style={{
+                    background: active ? `${marketColors[market]}1a` : "#141414",
+                    color: active ? marketColors[market] : "#555",
+                    border: `1px solid ${active ? marketColors[market] + "44" : "#1e1e1e"}`,
+                  }}
+                >
+                  <span>{MARKET_ICONS[market]}</span>
+                  {market}
+                </button>
+              );
+            })}
+            {isFiltered && (
+              <button
+                onClick={() => { setFilters(DEFAULT_FILTERS); setSearchQuery(""); }}
+                className="ml-auto flex-shrink-0 text-xs px-3 py-1.5 rounded-full transition-colors"
+                style={{ color: "#f87171", border: "1px solid #3a1515", background: "#160808" }}
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Row 3: Stats strip */}
+        <div className="px-4 sm:px-6 py-2" style={{ background: "#0a0a0a", borderBottom: "1px solid #141414" }}>
+          <div className="max-w-5xl mx-auto flex items-center gap-5 sm:gap-8">
+            <StatPill label="Showing" value={`${filtered.length} props`} />
+            <StatPill label="Avg Profit" value={fmt(avgProfit)} color="#10b981" />
+            <StatPill label="Top Deal" value={fmt(topProfit)} color="#34d399" />
+            <StatPill label="Investable" value={`${investableCount} / ${PROPERTIES.length}`} color="#f59e0b" />
+          </div>
+        </div>
+
+        {/* Row 4: Expandable filters */}
+        {showFilters && (
+          <div className="px-4 sm:px-6 py-3" style={{ background: "#0d0d0d", borderBottom: "1px solid #1a1a1a" }}>
+            <div className="max-w-5xl mx-auto flex flex-wrap items-end gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs" style={{ color: "#444" }}>Min Profit</label>
+                <select value={filters.minProfit} onChange={e => setFilters(prev => ({ ...prev, minProfit: Number(e.target.value) }))} className={selectCls}>
+                  <option value={0}>Any profit</option>
+                  <option value={500}>$500+</option>
+                  <option value={1000}>$1,000+</option>
+                  <option value={1500}>$1,500+</option>
+                  <option value={2000}>$2,000+</option>
+                  <option value={2500}>$2,500+</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs" style={{ color: "#444" }}>Max Rent</label>
+                <select value={filters.maxRent} onChange={e => setFilters(prev => ({ ...prev, maxRent: Number(e.target.value) }))} className={selectCls}>
+                  <option value={999999}>Any rent</option>
+                  <option value={1500}>≤ $1,500</option>
+                  <option value={2000}>≤ $2,000</option>
+                  <option value={2500}>≤ $2,500</option>
+                  <option value={3000}>≤ $3,000</option>
+                  <option value={4000}>≤ $4,000</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs" style={{ color: "#444" }}>Beds</label>
+                <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid #242424" }}>
+                  {[0, 1, 2, 3].map(b => (
+                    <button
+                      key={b}
+                      onClick={() => setFilters(prev => ({ ...prev, beds: b }))}
+                      className="px-3 py-1.5 text-xs transition-colors"
+                      style={{
+                        background: filters.beds === b ? "#10b981" : "#161616",
+                        color: filters.beds === b ? "#000" : "#888",
+                        fontWeight: filters.beds === b ? 700 : 400,
+                        borderLeft: b > 0 ? "1px solid #242424" : undefined,
+                      }}
+                    >
+                      {b === 0 ? "Any" : b === 3 ? "3+" : b}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs" style={{ color: "#444" }}>Sort</label>
+                <select value={filters.sortBy} onChange={e => setFilters(prev => ({ ...prev, sortBy: e.target.value }))} className={selectCls}>
+                  <option value="profit-desc">Profit: High → Low</option>
+                  <option value="profit-asc">Profit: Low → High</option>
+                  <option value="score-desc">Score: Best First</option>
+                  <option value="rent-asc">Rent: Low → High</option>
+                  <option value="rent-desc">Rent: High → Low</option>
+                  <option value="occupancy-desc">Occupancy: High → Low</option>
+                  <option value="payback-asc">Payback: Fastest First</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Property Grid ────────────────────────────────────────────────── */}
+      <main className="px-4 sm:px-6 py-5">
+        <div className="max-w-5xl mx-auto">
+          {filtered.length === 0 ? (
+            <div className="text-center py-20">
+              <p className="font-heading text-2xl font-semibold mb-2" style={{ color: "#333" }}>
+                No properties match
+              </p>
+              <p className="text-sm mb-5" style={{ color: "#555" }}>
+                Try a different search or loosen your filters
+              </p>
+              <button
+                onClick={() => { setFilters(DEFAULT_FILTERS); setSearchQuery(""); }}
+                className="text-sm px-4 py-2 rounded-lg"
+                style={{ background: "#10b981", color: "#000", fontWeight: 600 }}
+              >
+                Clear all filters
               </button>
             </div>
           ) : (
-            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
               {filtered.map((property) => (
                 <PropertyCard
                   key={property.id}
                   property={property}
                   selected={selectedId === property.id}
-                  onClick={() =>
-                    setSelectedId(
-                      selectedId === property.id ? null : property.id
-                    )
-                  }
+                  onClick={() => setSelectedId(selectedId === property.id ? null : property.id)}
                 />
               ))}
             </div>
@@ -1883,17 +1922,13 @@ export default function Home() {
       )}
 
       {/* Footer */}
-      <footer
-        className="px-6 py-8 mt-8"
-        style={{ borderTop: "1px solid #1a1a1a" }}
-      >
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
-          <p className="text-sm" style={{ color: "#444" }}>
+      <footer className="px-6 py-6 mt-4" style={{ borderTop: "1px solid #141414" }}>
+        <div className="max-w-5xl mx-auto flex flex-wrap items-center justify-between gap-4">
+          <p className="text-sm" style={{ color: "#3a3a3a" }}>
             © 2026 Nestly · Sample data for illustration purposes.
           </p>
-          <p className="text-xs" style={{ color: "#333" }}>
-            Profit estimates assume 3-night avg stay · 3% platform fee · market
-            cleaning rates
+          <p className="text-xs" style={{ color: "#2a2a2a" }}>
+            Profit estimates assume 3-night avg stay · 3% platform fee · market cleaning rates
           </p>
         </div>
       </footer>
