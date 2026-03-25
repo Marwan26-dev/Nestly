@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import type { User } from "@supabase/supabase-js";
+import { createClient } from "@/lib/supabase";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -825,6 +827,36 @@ function PropertyCard({
           <CompactStat label="Occ" value={`${(property.occupancy * 100).toFixed(0)}%`} />
           <CompactStat label="Rent" value={`$${(property.monthlyRent / 1000).toFixed(1)}k`} />
         </div>
+
+        {/* Sample badge + est. profit tooltip */}
+        <div className="flex items-center justify-between mt-2">
+          <span
+            className="font-semibold uppercase tracking-widest"
+            style={{ fontSize: 9, padding: "2px 5px", borderRadius: 4, background: "#0e1520", color: "#3a5a80", border: "1px solid #1a2840" }}
+          >
+            Sample
+          </span>
+          <div className="relative group/tip inline-flex items-center gap-1 cursor-help">
+            <span style={{ fontSize: 10, color: "#383838" }}>est. profit</span>
+            <span
+              className="w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0"
+              style={{ background: "#181818", border: "1px solid #252525", color: "#484848", fontSize: 9, lineHeight: 1 }}
+            >
+              i
+            </span>
+            {/* Tooltip popup — appears upward from bottom-right */}
+            <div
+              className="absolute bottom-full right-0 mb-2 w-52 rounded-xl p-2.5 opacity-0 group-hover/tip:opacity-100 transition-opacity pointer-events-none z-50"
+              style={{ background: "#101a28", border: "1px solid #1e2e44", fontSize: 11, color: "#6a9abf", lineHeight: 1.55 }}
+            >
+              Estimated based on market averages for this neighborhood. Connect live data for accurate projections.
+              <span
+                className="absolute top-full right-4"
+                style={{ display: "block", width: 0, height: 0, borderLeft: "5px solid transparent", borderRight: "5px solid transparent", borderTop: "5px solid #1e2e44" }}
+              />
+            </div>
+          </div>
+        </div>
       </div>
     </button>
   );
@@ -844,6 +876,32 @@ function StatPill({ label, value, color }: { label: string; value: string; color
     <div>
       <p style={{ fontSize: 10, color: "#444" }}>{label}</p>
       <p className="font-mono-nums text-sm font-semibold" style={{ color: color ?? "#888" }}>{value}</p>
+    </div>
+  );
+}
+
+// ─── Disclaimer banner (shown above the property grid) ────────────────────────
+
+function DisclaimerBanner() {
+  return (
+    <div
+      className="flex items-start gap-3 rounded-xl px-4 py-3 mb-4"
+      style={{ background: "#0d1520", border: "1px solid #1a2840" }}
+    >
+      <svg
+        width="14" height="14" viewBox="0 0 14 14" fill="none"
+        className="flex-shrink-0 mt-0.5"
+        style={{ color: "#4a7ab5" }}
+      >
+        <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.4"/>
+        <path d="M7 6v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+        <circle cx="7" cy="4.25" r="0.75" fill="currentColor"/>
+      </svg>
+      <p className="text-xs leading-relaxed" style={{ color: "#527aaa" }}>
+        <span className="font-semibold" style={{ color: "#6a9abf" }}>Sample data for demonstration</span>
+        {" "}— projections are estimates based on market averages, not live listings.
+        Always verify with your own research before signing a lease.
+      </p>
     </div>
   );
 }
@@ -1584,6 +1642,42 @@ export default function Home() {
   const [showFilters, setShowFilters] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
+  // ── Auth state ─────────────────────────────────────────────────────────────
+  const [user, setUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  async function handleLogout() {
+    const supabase = createClient();
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setUser(null);
+  }
+
+  // ── Soft paywall (show after 3 property opens, only for guests) ────────────
+  const [openCount, setOpenCount] = useState(0);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [paywallSeen, setPaywallSeen] = useState(false);
+
+  function handlePropertyClick(id: number) {
+    if (!user && !paywallSeen) {
+      const next = openCount + 1;
+      setOpenCount(next);
+      if (next >= 3) setShowPaywall(true);
+    }
+    setSelectedId(selectedId === id ? null : id);
+  }
+
   // Close suggestions on outside click
   useEffect(() => {
     function handle(e: MouseEvent) {
@@ -1690,23 +1784,51 @@ export default function Home() {
                   STR Profit Intelligence
                 </span>
               </div>
-              <button
-                onClick={() => setShowFilters(v => !v)}
-                className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all"
-                style={{
-                  background: showFilters ? "#0d1a14" : "#161616",
-                  color: showFilters ? "#10b981" : "#777",
-                  border: `1px solid ${showFilters ? "#1a3a28" : "#242424"}`,
-                }}
-              >
-                <svg width="13" height="11" viewBox="0 0 13 11" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                  <path d="M0 1.5h13M3 5.5h7M5 9.5h3"/>
-                </svg>
-                Filters
-                {(filters.minProfit !== 0 || filters.maxRent !== 999999 || filters.beds !== 0) && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] flex-shrink-0" />
+
+              <div className="flex items-center gap-2">
+                {/* User menu */}
+                {user ? (
+                  <>
+                    <span className="hidden sm:block text-xs truncate max-w-[140px]" style={{ color: "#555" }}>
+                      {user.email}
+                    </span>
+                    <button
+                      onClick={handleLogout}
+                      className="text-xs px-3 py-1.5 rounded-lg transition-colors hover:bg-[#1e1e1e]"
+                      style={{ color: "#777", border: "1px solid #242424", background: "#161616" }}
+                    >
+                      Sign out
+                    </button>
+                  </>
+                ) : (
+                  <a
+                    href="/auth"
+                    className="text-xs px-3 py-1.5 rounded-lg transition-colors"
+                    style={{ color: "#10b981", border: "1px solid #1a3a28", background: "#0d1a14" }}
+                  >
+                    Sign in
+                  </a>
                 )}
-              </button>
+
+                {/* Filters toggle */}
+                <button
+                  onClick={() => setShowFilters(v => !v)}
+                  className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all"
+                  style={{
+                    background: showFilters ? "#0d1a14" : "#161616",
+                    color: showFilters ? "#10b981" : "#777",
+                    border: `1px solid ${showFilters ? "#1a3a28" : "#242424"}`,
+                  }}
+                >
+                  <svg width="13" height="11" viewBox="0 0 13 11" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                    <path d="M0 1.5h13M3 5.5h7M5 9.5h3"/>
+                  </svg>
+                  Filters
+                  {(filters.minProfit !== 0 || filters.maxRent !== 999999 || filters.beds !== 0) && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] flex-shrink-0" />
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* Search bar */}
@@ -1882,6 +2004,8 @@ export default function Home() {
       {/* ── Property Grid ────────────────────────────────────────────────── */}
       <main className="px-4 sm:px-6 py-5">
         <div className="max-w-5xl mx-auto">
+          <DisclaimerBanner />
+
           {filtered.length === 0 ? (
             <div className="text-center py-20">
               <p className="font-heading text-2xl font-semibold mb-2" style={{ color: "#333" }}>
@@ -1905,7 +2029,7 @@ export default function Home() {
                   key={property.id}
                   property={property}
                   selected={selectedId === property.id}
-                  onClick={() => setSelectedId(selectedId === property.id ? null : property.id)}
+                  onClick={() => handlePropertyClick(property.id)}
                 />
               ))}
             </div>
@@ -1919,6 +2043,58 @@ export default function Home() {
           property={selectedProperty}
           onClose={() => setSelectedId(null)}
         />
+      )}
+
+      {/* ── Soft paywall modal ─────────────────────────────────────────────── */}
+      {showPaywall && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.78)", backdropFilter: "blur(5px)" }}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl p-8 text-center"
+            style={{ background: "#111", border: "1px solid #1e1e1e", boxShadow: "0 24px 64px rgba(0,0,0,0.6)" }}
+          >
+            {/* Icon */}
+            <div
+              className="w-12 h-12 rounded-xl flex items-center justify-center text-xl font-bold mx-auto mb-5"
+              style={{ background: "#10b981", color: "#000" }}
+            >
+              N
+            </div>
+
+            <h2 className="font-heading text-xl font-bold mb-2" style={{ color: "#f0f0f0" }}>
+              You&apos;re finding great deals
+            </h2>
+            <p className="text-sm leading-relaxed mb-6" style={{ color: "#666" }}>
+              Create a free account to save properties, compare deals, and get
+              notified when new listings match your criteria.
+            </p>
+
+            <a
+              href="/auth"
+              className="block w-full py-3 rounded-xl text-sm font-bold mb-3 transition-opacity hover:opacity-90"
+              style={{ background: "#10b981", color: "#000" }}
+            >
+              Sign up free
+            </a>
+            <a
+              href="/auth"
+              className="block w-full py-3 rounded-xl text-sm mb-4 transition-colors hover:bg-[#1a1a1a]"
+              style={{ color: "#888", border: "1px solid #1e1e1e" }}
+            >
+              Log in
+            </a>
+
+            <button
+              onClick={() => { setShowPaywall(false); setPaywallSeen(true); }}
+              className="text-xs transition-colors hover:text-[#888]"
+              style={{ color: "#444" }}
+            >
+              Maybe later — continue browsing
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Footer */}
